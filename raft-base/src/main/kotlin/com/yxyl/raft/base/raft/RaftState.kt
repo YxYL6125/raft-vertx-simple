@@ -8,5 +8,5 @@ data class RaftState(
     val status: RaftStatus,
     val commitIndex: Int,
     val applied: Int,
-    val leader: ServerId?,
+    val leader: ServerId?
 )

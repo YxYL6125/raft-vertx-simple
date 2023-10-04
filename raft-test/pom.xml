@@ -16,12 +16,11 @@
         <kotlin.version>1.8.21</kotlin.version>
     </properties>
 
-
     <dependencies>
         <dependency>
             <groupId>com.yxyl</groupId>
             <artifactId>raft-base</artifactId>
-            <version>${base.version</version>
+            <version>${base.version}</version>
         </dependency>
         <dependency>
             <groupId>com.yxyl</groupId>
@@ -31,7 +30,7 @@
         <dependency>
             <groupId>com.yxyl</groupId>
             <artifactId>raft-client</artifactId>
-            <version>${client.version</version>
+            <version>${base.version}</version>
         </dependency>
         <dependency>
             <groupId>junit</groupId>

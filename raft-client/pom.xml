@@ -10,7 +10,7 @@
     </parent>
 
     <artifactId>raft-client</artifactId>
-    <version>${client.version</version>
+    <version>${client.version}</version>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -22,11 +22,10 @@
     </properties>
 
     <dependencies>
-
         <dependency>
             <groupId>com.yxyl</groupId>
             <artifactId>raft-base</artifactId>
-            <version>${base.version</version>
+            <version>${base.version}</version>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.datatype</groupId>
@@ -75,6 +74,7 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
 
     <profiles>
         <profile>

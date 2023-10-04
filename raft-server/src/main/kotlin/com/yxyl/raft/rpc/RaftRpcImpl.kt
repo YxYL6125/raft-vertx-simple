@@ -1,12 +1,13 @@
 package com.yxyl.raft.rpc
 
+import com.yxyl.exception.NotLeaderException
 import com.yxyl.raft.Raft
 import com.yxyl.raft.base.ADD_SERVER_PATH
 import com.yxyl.raft.base.ServerId
 import com.yxyl.raft.base.raft.RaftAddress
 import com.yxyl.raft.base.raft.RaftServerInfo
 import com.yxyl.raft.base.raft.RaftStatus
-import com.yxyl.raft.base.utils.suspendHandle
+import com.yxyl.raft.base.util.suspendHandle
 import com.yxyl.raft.rpc.entity.*
 import io.vertx.core.CompositeFuture
 import io.vertx.core.Future
@@ -22,10 +23,7 @@ import io.vertx.ext.web.codec.BodyCodec
 import io.vertx.ext.web.handler.BodyHandler
 import io.vertx.kotlin.coroutines.await
 
-class RaftRpcImpl(
-    private val vertx: Vertx,
-    private val raft: Raft,
-) : RaftRpc, RaftRpcHandler {
+class RaftRpcImpl(private val vertx: Vertx, private val rf: Raft) : RaftRpc, RaftRpcHandler {
 
     private val raftRpcClient = WebClient.create(
         vertx,
@@ -42,76 +40,82 @@ class RaftRpcImpl(
         const val server_id_header = "raft_server_id"
     }
 
-
-    /**
-     *      这个方法是在实现Raft协议中的投票请求部分。下面是对这个方法的详细解释：
-     *       override fun requestVote：这个函数覆盖了RaftRpc接口中的requestVote方法。它接受两个参数：一个是远程服务器的地址(remote)，另一个是投票请求(requestVote)。
-     *       raftRpcClient.post(remote.port(), remote.host(), requestVoteReply_path)：这行代码使用WebClient向远程服务器发送一个POST请求。请求的路径是requestVoteReply_path，这是在伴生对象中定义的一个常量。
-     *      .putHeader(server_id_header, raft.me)：这行代码在请求头中添加了一个键值对，键是server_id_header（也是在伴生对象中定义的一个常量），值是当前节点的ID(raft.me)。
-     *      .as(BodyCodec.buffer())：这行代码设置了请求体的编码方式为buffer。
-     *      .sendBuffer(requestVote.toBuffer())：这行代码将投票请求转换为buffer，然后发送出去。
-     *      .map { RequestVoteReply(it.body()) }：这行代码将收到的响应体映射为RequestVoteReply对象。
-     *       catch (e: Exception) { Future.failedFuture(e) }：如果在发送请求或处理响应时发生异常，这个方法会返回一个失败的Future。
-     */
     override fun requestVote(
         remote: SocketAddress,
-        requestVote: RequestVote,
-    ): Future<RequestVoteReply> = try {
-        raftRpcClient.post(remote.port(), remote.host(), requestVoteReply_path)
-            .putHeader(server_id_header, raft.me)
-            .`as`(BodyCodec.buffer())
-            .sendBuffer(requestVote.toBuffer())
-            .map { RequestVoteReply(it.body()) }
-    } catch (e: Exception) {
-        Future.failedFuture(e)
-
+        requestVote: RequestVote
+    ): Future<RequestVoteReply> {
+        return try {
+            raftRpcClient.post(remote.port(), remote.host(), requestVoteReply_path)
+                .putHeader(server_id_header, rf.me)
+                .`as`(BodyCodec.buffer())
+                .sendBuffer(requestVote.toBuffer())
+                .map {
+                    RequestVoteReply(it.body())
+                }
+        } catch (e: Exception) {
+            Future.failedFuture(e)
+        }
     }
 
-    override fun test(remote: SocketAddress): Future<Unit> = try {
-        raftRpcClient.post(remote.port(), remote.host(), test_path)
-            .putHeader(server_id_header, raft.me)
-            .`as`(BodyCodec.buffer())
-            .send()
-            .flatMap {
-                if (it.statusCode() != 200) {
-                    Future.failedFuture("PING Fail")
-                } else {
-                    Future.succeededFuture()
+    override fun test(remote: SocketAddress): Future<Unit> {
+        return try {
+            raftRpcClient.post(remote.port(), remote.host(), test_path)
+                .putHeader(server_id_header, rf.me)
+                .`as`(BodyCodec.buffer())
+                .send()
+                .flatMap {
+                    if (it.statusCode() != 200) {
+                        Future.failedFuture("PING fail")
+                    } else {
+                        Future.succeededFuture()
+                    }
                 }
-            }
-    } catch (e: Exception) {
-        Future.failedFuture(e)
+        } catch (e: Exception) {
+            Future.failedFuture(e)
+        }
     }
 
     override fun appendRequest(
         remote: SocketAddress,
-        appendable: AppendRequest,
-    ): Future<AppendReply> = try {
-        raftRpcClient.post(remote.port(), remote.host(), appendRequest_path)
-            .putHeader(server_id_header, raft.me)
-            .`as`(BodyCodec.buffer())
-            .send()
-            .map { AppendReply(it.body()) }
-    } catch (e: Exception) {
-        Future.failedFuture(e)
+        appendRequest: AppendRequest
+    ): Future<AppendReply> {
+        return try {
+            raftRpcClient.post(remote.port(), remote.host(), appendRequest_path)
+                .putHeader(server_id_header, rf.me)
+                .`as`(BodyCodec.buffer())
+                .sendBuffer(appendRequest.toBuffer())
+                .map {
+                    AppendReply(it.body())
+                }
+        } catch (e: Exception) {
+            Future.failedFuture(e)
+        }
     }
-
 
     override fun addServer(
         remote: SocketAddress,
-        request: AddServerRequest,
-    ): Future<AddServerResponse> = try {
-        raftRpcClient.post(remote.port(), remote.host(), ADD_SERVER_PATH)
-            .putHeader(server_id_header, raft.me)
-            .`as`(BodyCodec.json(AddServerResponse::class.java))
-            .sendBuffer(Json.encodeToBuffer(request))
-            .map { it.body() }
-    } catch (e: Exception) {
-        Future.failedFuture(e)
+        request: AddServerRequest
+    ): Future<AdderServerResponse> {
+        return try {
+            raftRpcClient.post(remote.port(), remote.host(), ADD_SERVER_PATH)
+                .putHeader(server_id_header, rf.me)
+                .`as`(BodyCodec.json(AdderServerResponse::class.java))
+                .sendBuffer(Json.encodeToBuffer(request))
+                .map {
+                    it.body()
+                }
+        } catch (e: Exception) {
+            Future.failedFuture(e)
+        }
     }
 
-    override suspend fun requestVoteSuspend(remote: SocketAddress, requestVote: RequestVote): RequestVoteReply =
-        requestVote(remote, requestVote).await()
+    override suspend fun requestVoteSuspend(
+        remote: SocketAddress,
+        requestVote: RequestVote
+    ): RequestVoteReply {
+        return requestVote(remote, requestVote)
+            .await()
+    }
 
 
     override fun init(vertx: Vertx, raftPort: Int): Future<Unit> {
@@ -121,7 +125,8 @@ class RaftRpcImpl(
             .handler(BodyHandler.create(false))
             .handler {
                 val body = it.body().buffer()
-                val appendRequest = AppendRequest(body, it.request().getHeader(server_id_header))
+                val appendRequest =
+                    AppendRequest(body, it.request().getHeader(server_id_header))
                 it.end(appendRequest(appendRequest).toBuffer())
             }
 
@@ -129,7 +134,7 @@ class RaftRpcImpl(
             .handler(BodyHandler.create(false))
             .handler {
                 it.end(
-                    RequestVote(
+                    requestVote(
                         RequestVote(
                             it.request().getHeader(server_id_header),
                             it.body().buffer()
@@ -148,88 +153,89 @@ class RaftRpcImpl(
             .suspendHandle {
                 val body = JsonObject(it.request().body().await())
                     .mapTo(RaftServerInfo::class.java)
-                raft.raftLog("recv add Server request: $body")
+                rf.raftLog("recv add Server request: $body")
                 body.raftAddress =
                     RaftAddress(body.raftAddress.port, it.request().remoteAddress().host(), body.raftAddress.httpPort)
                 val apply = Promise.promise<Map<ServerId, RaftAddress>>()
-
-
+                rf.addServer(body, apply)
+                val res = try {
+                    val peerInfo = apply.future().await()
+                    AdderServerResponse(true, RaftAddress(rf.raftPort, "localhost", rf.httpPort), rf.me, peerInfo)
+                } catch (t: NotLeaderException) {
+                    val leaderInfo = t.leaderInfo
+                    AdderServerResponse(false, leaderInfo, rf.leadId!!, mapOf())
+                } catch (t: Exception) {
+                    t.printStackTrace()
+                }
+                it.json(res)
             }
+
 
         return vertx.createHttpServer()
             .requestHandler(router)
             .listen(raftPort)
-            .flatMap { s ->
-                raft.raftLog("raft core is listening on ${s.actualPort()}")
-                CompositeFuture.all(raft.peers.map { test(it.value.SocketAddress()) })
+            .flatMap { httpServer ->
+                rf.raftLog("raft core is listening on ${httpServer.actualPort()}")
+                CompositeFuture.all(rf.peers.map { test(it.value.SocketAddress()) })
             }
             .map(Unit)
-
-    }
-
-    private fun RequestVote(msg: RequestVote): RequestVoteReply {
-        raft.lastHearBeat = System.currentTimeMillis()
-        raft.raftLog("receive request vote, msg :${msg}")
-
-        if (msg.term < raft.currentTerm) {
-            return RequestVoteReply(raft.currentTerm, false)
-        }
-
-        val lastLogTerm = raft.getLastLogTerm()
-        val lastLogIndex = raft.getNowLogIndex()
-
-        raft.currentTerm = msg.term
-        //如果 voteFor 为空或者已经投给他了
-        //如果 voteFor 为空或者为 candidateId,并且候选人的日志至少和自己一样新，那么就投票给热爱
-        if ((raft.votedFor == null || raft.votedFor == msg.candidateId) && msg.lastLogIndex >= lastLogIndex) {
-            if (msg.lastLogTerm == lastLogTerm && msg.lastLogIndex < lastLogIndex) {
-                return RequestVoteReply(raft.currentTerm, false)
-            }
-            raft.votedFor = msg.candidateId
-            raft.raftLog("vote to ${msg.candidateId}")
-            return RequestVoteReply(raft.currentTerm, true)
-        }
-
-        return RequestVoteReply(raft.currentTerm, false)
     }
 
     private fun appendRequest(msg: AppendRequest): AppendReply {
-        raft.lastHearBeat = System.currentTimeMillis()
-        //如果发来log的term比我本身的term还要小的话，直接拉到
-        if (msg.term < raft.currentTerm) {
-            return AppendReply(raft.currentTerm, false)
+        rf.lastHearBeat = System.currentTimeMillis()
+        if (msg.term < rf.currentTerm) {
+            return AppendReply(rf.currentTerm, false)
         }
-        //变成follower
-        if (raft.status != RaftStatus.follower) {
-            raft.becomeFollower(msg.term)
+        if (rf.status != RaftStatus.follower) {
+            rf.becomeFollower(msg.term)
         }
-        //产生了新的leader
-        if (raft.leadId != msg.leaderId) {
-            //我就不投了
-            raft.votedFor = null
-            //发送msg的server就是我的leader
-            raft.leadId = msg.leaderId
+        //产生了新leader
+        if (rf.leadId != msg.leaderId) {
+            rf.votedFor = null
+            rf.leadId = msg.leaderId
         }
-        raft.commitIndex = msg.leaderCommit
-        raft.currentTerm = msg.term
-        val nowIndex = raft.getNowLogIndex()
+        rf.commitIndex = msg.leaderCommit
+        rf.currentTerm = msg.term
+        val nowIndex = rf.getNowLogIndex()
 
         //leader比他长
-        if (nowIndex > msg.prevLogIndex) {
-            return AppendReply(raft.currentTerm, false)
+        if (nowIndex < msg.prevLogIndex) {
+            return AppendReply(rf.currentTerm, false)
         }
 
-        //拿到我的任期
-        val term = raft.getTermByIndex(msg.prevLogIndex)
-        raft.raftLog("leader{${msg.leaderId}}:${msg.prevLogIndex} ${msg.prevLogTerm} follower$nowIndex $term log_count:${msg.entries.size}")
+        val term = rf.getTermByIndex(msg.prevLogIndex)
+        rf.raftLog("leader{${msg.leaderId}}:${msg.prevLogIndex} ${msg.prevLogTerm} follower$nowIndex $term log_count:${msg.entries.size}")
         if (term == msg.prevLogTerm) {
-            //我接受log
-            raft.insertLogs(msg.prevLogIndex, msg.entries)
-            raft.stateMachine.applyLog(raft.commitIndex)
-            return AppendReply(raft.currentTerm, true)
+            rf.insertLogs(msg.prevLogIndex, msg.entries)
+            rf.stateMachine.applyLog(rf.commitIndex)
+            return AppendReply(rf.currentTerm, true)
         } else {
-            return AppendReply(raft.currentTerm, false)
+            return AppendReply(rf.currentTerm, false)
         }
+    }
+
+    private fun requestVote(msg: RequestVote): RequestVoteReply {
+
+        rf.lastHearBeat = System.currentTimeMillis()
+
+        rf.raftLog("receive request vote, msg :${msg}")
+        if (msg.term < rf.currentTerm) {
+            return RequestVoteReply(rf.currentTerm, false)
+        }
+        val lastLogTerm = rf.getLastLogTerm()
+        val lastLogIndex = rf.getNowLogIndex()
+        rf.currentTerm = msg.term
+        //若voteFor为空或者已经投给他了
+        //如果 votedFor 为空或者为 candidateId，并且候选人的日志至少和自己一样新，那么就投票给他（5.2 节，5.4 节）
+        if ((rf.votedFor == null || rf.votedFor == msg.candidateId) && msg.lastLogTerm >= lastLogTerm) {
+            if (msg.lastLogTerm == lastLogTerm && msg.lastLogIndex < lastLogIndex) {
+                return RequestVoteReply(rf.currentTerm, false)
+            }
+            rf.votedFor = msg.candidateId
+            rf.raftLog("vote to ${msg.candidateId}")
+            return RequestVoteReply(rf.currentTerm, true)
+        }
+        return RequestVoteReply(rf.currentTerm, false)
     }
 
 

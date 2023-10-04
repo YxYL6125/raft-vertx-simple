@@ -1,11 +1,8 @@
 package com.yxyl.raft.client
 
-import com.yxyl.raft.base.COMMAND_PATH
-import com.yxyl.raft.base.PEEK_PATH
-import com.yxyl.raft.base.kv.DelCommand
-import com.yxyl.raft.base.kv.ReadCommand
-import com.yxyl.raft.base.kv.SetCommand
-import com.yxyl.raft.base.kv.SimpleKvStateMachineCodec
+import DataResult
+import com.yxyl.raft.base.*
+import com.yxyl.raft.base.kv.*
 import com.yxyl.raft.base.raft.RaftSnap
 import io.netty.util.internal.EmptyArrays
 import io.vertx.core.Vertx
@@ -36,7 +33,7 @@ class RaftClient(val vertx: Vertx, val address: SocketAddress) {
         .map { it.body() }
 
     fun get(key: ByteArray) = webClient
-        .get(address.port(), address.host(), COMMAND_PATH)
+        .post(address.port(), address.host(), COMMAND_PATH)
         .`as`(BodyCodec.buffer())
         .sendBuffer(ReadCommand.create(key).toBuffer())
         .map {
@@ -55,13 +52,12 @@ class RaftClient(val vertx: Vertx, val address: SocketAddress) {
         .sendBuffer(ReadCommand.create(EmptyArrays.EMPTY_BYTES).toBuffer())
         .map {
             val hasError = it.statusCode() == 500
-            val body = SimpleKvStateMachineCodec.decode(it.body() ?: Buffer.buffer())
+            var body = SimpleKVStateMachineCodec.decode(it.body() ?: Buffer.buffer())
             if (hasError) {
                 DataResult(hasError, body, body.toString())
             } else {
                 DataResult(hasError, body)
             }
         }
-
 
 }

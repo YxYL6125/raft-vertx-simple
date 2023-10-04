@@ -1,25 +1,23 @@
 package com.yxyl.raft.base.kv
 
+import com.yxyl.raft.base.kv.ByteArrayKey
 import io.vertx.core.buffer.Buffer
 
-/**
- * 为键值状态机快照提供编码和解码的功能
- */
-class SimpleKvStateMachineCodec {
-
+// n*[总长度][当前key长度][key][value]
+class SimpleKVStateMachineCodec {
     companion object {
         fun encode(stateMachineSnap: Map<ByteArrayKey, ByteArray>): Buffer {
             var buffer = Buffer.buffer()
-            stateMachineSnap.forEach { k, v ->
-                buffer = buffer
-                    .appendInt(k.byteArray.size + v.size)
-                    .appendInt(k.size())
-                    .appendBytes(k.byteArray)
-                    .appendBytes(v)
+            stateMachineSnap.forEach { key, value ->
+                buffer =
+                    buffer
+                        .appendInt(key.byteArray.size + value.size)
+                        .appendInt(key.size())
+                        .appendBytes(key.byteArray)
+                        .appendBytes(value)
             }
             return buffer
         }
-
 
         fun decode(buffer: Buffer): Map<ByteArrayKey, ByteArray> {
             var hasRead = 0;
@@ -38,6 +36,4 @@ class SimpleKvStateMachineCodec {
             return res
         }
     }
-
-
 }

@@ -1,7 +1,13 @@
-package com.yxyl.raft.base.utils
+package com.yxyl.raft.base.util
+
+/**
+ * @program: raft-vertx-simple
+ * @description:
+ * @author: YxYL
+ * @create: 2023-10-04 15:11
+ **/
 
 class IntAdder(var value: Int) {
-
     fun add(v: Int) {
         value += v
     }
@@ -16,12 +22,13 @@ class IntAdder(var value: Int) {
 
         other as IntAdder
 
-        return value == other.value
+        if (value != other.value) return false
+
+        return true
     }
 
     override fun hashCode(): Int {
         return value
     }
-
-
+    
 }

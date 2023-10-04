@@ -5,4 +5,5 @@ import io.vertx.core.Vertx
 
 interface RaftRpcHandler {
     fun init(vertx: Vertx, raftPort: Int): Future<Unit>
+
 }

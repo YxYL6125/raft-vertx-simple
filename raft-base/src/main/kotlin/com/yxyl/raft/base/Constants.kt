@@ -1,6 +1,13 @@
 package com.yxyl.raft.base
 
-import java.util.UUID
+import java.util.*
+
+/**
+ * @program: raft-vertx-simple
+ * @description:
+ * @author: YxYL
+ * @create: 2023-10-04 15:03
+ **/
 
 typealias ServerId = String
 

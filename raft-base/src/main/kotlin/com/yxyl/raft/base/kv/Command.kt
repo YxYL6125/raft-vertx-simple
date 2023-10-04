@@ -1,11 +1,12 @@
 package com.yxyl.raft.base.kv
 
 import com.yxyl.raft.base.raft.RaftServerInfo
-import com.yxyl.raft.base.utils.fromByteArray
-import com.yxyl.raft.base.utils.wrap
-import com.yxyl.raft.base.utils.wrapSlice
+import com.yxyl.raft.base.util.Util
+import com.yxyl.raft.base.util.wrap
+import com.yxyl.raft.base.util.wrapSlice
 import io.vertx.core.json.Json
 import io.vertx.core.json.JsonObject
+
 
 sealed class Command {
     companion object {
@@ -52,7 +53,7 @@ class SetCommand(rawCommand: ByteArray) : Command() {
     }
 
     init {
-        val length = fromByteArray(rawCommand, 1)
+        val length = Util.fromByteArray(rawCommand, 1)
         key = rawCommand.sliceArray(5 until 5 + length)
         value = rawCommand.sliceArray(5 + length until rawCommand.size)
         // 0 1 2 3 4 5 6

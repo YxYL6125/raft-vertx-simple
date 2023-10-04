@@ -6,5 +6,5 @@ data class RaftSnap(
     val nextIndex: Map<ServerId, Int>,
     val matchIndex: Map<ServerId, Int>,
     val peers: Map<ServerId, RaftAddress>,
-    val raftState: RaftState,
+    val raftState: RaftState
 )

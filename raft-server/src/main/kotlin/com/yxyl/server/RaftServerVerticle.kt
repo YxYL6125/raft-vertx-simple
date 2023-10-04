@@ -1,14 +1,17 @@
 package com.yxyl.server
 
-import com.yxyl.configuration.Configuration
+import com.yxyl.config.Configuration
 import com.yxyl.exception.NotLeaderException
 import com.yxyl.exception.UnknownCommandException
 import com.yxyl.raft.Raft
 import com.yxyl.raft.base.*
-import com.yxyl.raft.base.kv.*
+import com.yxyl.raft.base.kv.Command
+import com.yxyl.raft.base.kv.DelCommand
+import com.yxyl.raft.base.kv.ReadCommand
+import com.yxyl.raft.base.kv.SetCommand
 import com.yxyl.raft.base.raft.RaftSnap
-import com.yxyl.raft.base.utils.EMPTY_BUFFER
-import com.yxyl.raft.base.utils.suspendHandle
+import com.yxyl.raft.base.util.EMPTY_BUFFER
+import com.yxyl.raft.base.util.suspendHandle
 import io.vertx.core.AbstractVerticle
 import io.vertx.core.Future
 import io.vertx.core.Promise
@@ -18,9 +21,14 @@ import io.vertx.ext.web.Router
 import io.vertx.kotlin.coroutines.await
 
 /**
- *
- */
+ * @program: raft-vertx-simple
+ * @description:
+ * @author: YxYL
+ * @create: 2023-10-04 15:16
+ **/
+
 class RaftServerVerticle(val configuration: Configuration, val raft: Raft) : AbstractVerticle() {
+
     private lateinit var internalContext: ContextInternal
 
     override fun start(startPromise: Promise<Void>) {
@@ -41,7 +49,6 @@ class RaftServerVerticle(val configuration: Configuration, val raft: Raft) : Abs
                     it.end(t.message)
                 }
             }
-
         router.get(PEEK_PATH)
             .suspendHandle {
                 val snap = peekRaft().await()
@@ -50,7 +57,7 @@ class RaftServerVerticle(val configuration: Configuration, val raft: Raft) : Abs
 
         vertx.createHttpServer()
             .requestHandler(router)
-            .listen(configuration.raftPort)
+            .listen(configuration.httpPort)
             .onComplete {
                 if (it.succeeded()) {
                     startPromise.complete()
@@ -66,9 +73,11 @@ class RaftServerVerticle(val configuration: Configuration, val raft: Raft) : Abs
         return promise.future()
     }
 
+
     private fun handleCommandRequest(body: Buffer): Future<CommandResponse> {
+
         val request = CommandRequest.decode(body)
-        return when (val command = request.command) {
+        val res = when (val command = request.command) {
             is DelCommand, is SetCommand -> {
                 val promise = internalContext.promise<Unit>()
                 raft.addLog(command, promise)
@@ -80,7 +89,9 @@ class RaftServerVerticle(val configuration: Configuration, val raft: Raft) : Abs
                 val promise = internalContext.promise<Buffer>()
                 raft.lineRead(command.key, promise)
                 promise.future()
-                    .map { CommandResponse(it) }
+                    .map {
+                        CommandResponse(it)
+                    }
             }
 
             else -> {
@@ -89,11 +100,13 @@ class RaftServerVerticle(val configuration: Configuration, val raft: Raft) : Abs
                 promise.future()
             }
         }
+
+        return res
     }
 
-
     @JvmInline
-    value class CommandResponse(val result: Buffer = EMPTY_BUFFER)
+    value class CommandResponse(val result: Buffer = EMPTY_BUFFER) {
+    }
 
     class CommandRequest(val command: Command) {
         companion object {
@@ -103,5 +116,5 @@ class RaftServerVerticle(val configuration: Configuration, val raft: Raft) : Abs
             }
         }
     }
-}
 
+}

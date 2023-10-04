@@ -1,4 +1,4 @@
-package com.yxyl.raft.base.utils
+package com.yxyl.raft.base.util
 
 import io.vertx.core.Promise
 import io.vertx.kotlin.coroutines.await
@@ -14,7 +14,6 @@ class CountDownLatch(count: Int) {
         }
     }
 
-
     suspend fun wait() = waiter.future().await()
 
     fun future() = waiter.future()
@@ -25,4 +24,5 @@ class CountDownLatch(count: Int) {
             waiter.complete()
         }
     }
+
 }

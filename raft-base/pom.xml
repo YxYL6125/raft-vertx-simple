@@ -10,13 +10,11 @@
     </parent>
 
     <artifactId>raft-base</artifactId>
-    <version>${base.version</version>
+    <version>${base.version}</version>
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <kotlin.version>1.8.21</kotlin.version>
     </properties>
-
-
 
     <dependencies>
         <dependency>
