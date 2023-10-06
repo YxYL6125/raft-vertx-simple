@@ -158,11 +158,15 @@ class KVStateMachine(private val vertx: Vertx, private val rf: Raft) {
     @SwitchThread(Raft::class)
     fun addLog(command: Command, callback: () -> Unit) {
         vertx.runOnContext {
+            //获取当前的日志索引
             val index = getNowLogIndex() + 1
+            //创建一个新的日志条目并将其添加到日志中
             val log = Log(index, rf.currentTerm, command.toByteArray())
             logs.add(log)
+            //将这个日志条目添加到日志分发器中
             logDispatcher.appendLogs(listOf(log))
             if (command !is ServerConfigChangeCommand) {
+                //如果命令不是ServerConfigChangeCommand，那么将索引和回调函数添加到等待队列中
                 applyEventWaitQueue.offer(index to callback)
             } else {
                 //这里特殊直接就apply

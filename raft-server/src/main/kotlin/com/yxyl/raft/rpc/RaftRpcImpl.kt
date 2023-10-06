@@ -214,6 +214,9 @@ class RaftRpcImpl(private val vertx: Vertx, private val rf: Raft) : RaftRpc, Raf
         }
     }
 
+    /**
+     * 接收方处理投票请求
+     */
     private fun requestVote(msg: RequestVote): RequestVoteReply {
 
         rf.lastHearBeat = System.currentTimeMillis()

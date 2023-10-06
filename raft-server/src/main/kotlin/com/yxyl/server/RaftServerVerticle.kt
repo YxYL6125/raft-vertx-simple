@@ -22,7 +22,7 @@ import io.vertx.kotlin.coroutines.await
 
 /**
  * @program: raft-vertx-simple
- * @description:
+ * @description: 处理Raft协议相关的HTTP请求Verticle
  * @author: YxYL
  * @create: 2023-10-04 15:16
  **/
@@ -56,7 +56,7 @@ class RaftServerVerticle(val configuration: Configuration, val raft: Raft) : Abs
             }
 
         vertx.createHttpServer()
-            .requestHandler(router)
+            .requestHandler(router) 
             .listen(configuration.httpPort)
             .onComplete {
                 if (it.succeeded()) {
@@ -67,13 +67,18 @@ class RaftServerVerticle(val configuration: Configuration, val raft: Raft) : Abs
             }
     }
 
+    /**
+     * 获取快照
+     */
     private fun peekRaft(): Future<RaftSnap> {
         val promise = internalContext.promise<RaftSnap>()
         raft.raftSnap(promise::complete)
         return promise.future()
     }
 
-
+    /**
+     * 设置命令的路由处理
+     */
     private fun handleCommandRequest(body: Buffer): Future<CommandResponse> {
 
         val request = CommandRequest.decode(body)

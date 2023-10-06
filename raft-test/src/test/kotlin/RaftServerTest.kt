@@ -20,12 +20,13 @@ class RaftServerTest {
         val httpPort = 8080
         val configurations = mutableListOf<Configuration>()
         val vertx = Vertx.vertx()
+        //创建3个RaftAddress
         val nodes = mapOf(
             "raft-0" to RaftAddress(80, "localhost"),
             "raft-1" to RaftAddress(81, "localhost"),
             "raft-2" to RaftAddress(82, "localhost"),
         )
-
+        
         for (i in (0..2)) {
             val nodeId = "raft-$i"
             configurations.add(
@@ -37,9 +38,9 @@ class RaftServerTest {
                     HashMap(nodes).apply { remove(nodeId) })
             )
         }
-
+        //创建3个RaftServer
         val servers = configurations.map { RaftServer(it) }
-
+        //全部启动！
         CompositeFuture.all(servers.map(RaftServer::start)).block()
         
         Thread.sleep(2000)

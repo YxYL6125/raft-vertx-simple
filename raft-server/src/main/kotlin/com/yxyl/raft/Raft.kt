@@ -154,12 +154,14 @@ class Raft(
                 if (addModeConfig != null) {
                     raftLog("start in addServerMode")
                     var targetAddress = addModeConfig.SocketAddress()
-                    //fast path先试一下
+                    //首先尝试向目标地址发送addServer请求
                     var response = rpc.addServer(
                         targetAddress,
                         AddServerRequest(RaftAddress(raftPort, "localhost", httpPort), me)
                     ).await()
                     while (!response.ok) {
+                        //如果收到的响应表示请求失败（可能是因为目标不是领导者）
+                        //那么会更新目标地址并重新发送请求，直到请求成功为止
                         targetAddress = response.leader.SocketAddress()
                         response = rpc.addServer(
                             targetAddress,
@@ -167,6 +169,7 @@ class Raft(
                         ).await()
                     }
                     raftLog("get now leader info $response")
+                    //成功后，更新领导者ID和对等node信息
                     leadId = response.leaderId
                     peers.putAll(response.peer)
                     peers[response.leaderId] = RaftAddress(targetAddress).apply { httpPort = response.leader.httpPort }
@@ -176,6 +179,7 @@ class Raft(
                 startPromise.fail(t)
                 exitProcess(1)
             }
+            //初始化状态机和RPC处理器，并开始检查超时。如果发生错误，启动Promise失败并退出进程。
             stateMachine.init()
                 .compose { rpcHandler.init(singleThreadVertx, raftPort) }
                 .onSuccess { startTimeoutCheck() }
@@ -184,26 +188,27 @@ class Raft(
         }
     }
 
+    //超时过程
     private fun startTimeoutCheck() {
         CoroutineScope(context.dispatcher() as CoroutineContext).launch {
             while (true) {
+                //超时时间设置为300-450之间
                 val timeout = (ElectronInterval + Random.nextInt(150)).toLong()
                 val start = System.currentTimeMillis()
                 delay(timeout)
                 if (lastHearBeat < start && status != RaftStatus.leader) {
+                    //开始超时选举
                     startElection()
                 }
             }
         }
-
     }
 
 
     private fun startElection() {
         becomeCandidate()
         raftLog("start election")
-        val buffer =
-            RequestVote(currentTerm, stateMachine.getNowLogIndex(), stateMachine.getLastLogTerm())
+        val buffer = RequestVote(currentTerm, stateMachine.getNowLogIndex(), stateMachine.getLastLogTerm())
         //法定人数为一半+1 而peer为不包含当前节点的集合 所以peer.size + 1为集群总数
         val quorum = (peers.size + 1) / 2 + 1
         //-1因为自己给自己投了一票
@@ -219,7 +224,10 @@ class Raft(
                 .onSuccess {
                     val raft = this
                     if (it.isVoteGranted) {
+                        //如果节点投了赞成票 isVoteGranted为true
+                        //显示已经得到的赞成票数量和是否允许进入下一轮
                         raftLog("get vote from ${address.key}, count: ${count.get()} allowNex: ${allowNext}}")
+                        //如果赞成票数量降到0，并且还没有进入下一轮，那么就会解锁allowNextPromise，允许进入下一轮。
                         if (count.decrementAndGet() == 0 && allowNext.compareAndSet(false, true)) {
                             allowNextPromise.complete()
                         }
@@ -374,6 +382,7 @@ class Raft(
     fun getLastLogTerm(): Int {
         return stateMachine.getLastLogTerm()
     }
+
     fun close() {
         singleThreadVertx.close()
     }
@@ -384,6 +393,7 @@ class Raft(
         }
         println("[${LocalDateTime.now()} serverId:$me term:$currentTerm index = ${stateMachine.getNowLogIndex()} status:${status} voteFor: ${votedFor}]: message:$msg")
     }
+
     /**
      * 外部调用的一个接口所以要确保线程安全
      */
