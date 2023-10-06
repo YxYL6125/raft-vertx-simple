@@ -236,22 +236,327 @@ Raft采取了一种简单的方式：除非前面的所有term内的以提交的
 
 只有提交当前term的记录的时候，才能用 **副本数量到达大多数** 的方式
 
-## Membership changes
 
-到目前位置，我们都是假设了**node集合是不变**的，但是在实际场景中，又是需要增加或者删除节点。这个时候，显然会想到：`关闭集群 -> 更新配置文件 -> 重新开启集群` 这样的方式 是可以达到目的的，但是缺点也显而易见了：关闭集群的时间段内集群是无法对外提供服务；同时也可能因为其中受到而引发故障。为了避免这些问题，Raft选择**自动化配置变更**
 
-> 我日了，这里成员变更也太难受了，我想的是等回来写毕设的时候，在仔细研读一下……:cry:
+---
 
-## log compaction
+## Code
 
-Snapshot是最简单的压缩方式
+下面是关于代码的一些落地：
 
-在这种方式中，会对当前的整个日志做一次snapshot,将其写到持久存储上，然后将已经做过快照的log全部清空，**Chubby**和**Zookeeper**都是用了这种方式
+### 文件落盘
 
-## Some Interviewes
+在初始化Raft的时候，会创建并初始化状态机：
 
-> node故障后为何不重置candidate,而是follower
+```java
+val stateMachine = KVStateMachine(singleThreadVertx, this)
 
-> leader在准备commit某个log的时候G了，Raft如何保证一致性
+fun init(): Future<Unit> {
+    val promise = Promise.promise<Unit>()
+    **vertx.setTimer(5000) { logDispatcher.sync() }**
+    logDispatcher.recoverLog {
+        logs = it
+        vertx.runOnContext { promise.complete() }
+    }
+    return promise.future()
+}
 
-> 假设某个follower节点出现网络分区，由于接收不到leader的心跳包，所以会不断选举，term会一直增加。加入原集群后会把原leader降级为follower，导致重新选举。但实际上它并不能成为leader(没有最新日志)，造成disruption。如何解决？
+@NonBlocking
+@SwitchThread(LogDispatcher::class)
+fun sync() {
+    executor.execute {
+        **rf.metaInfo.force()
+        logFile.force(true)**
+    }
+}
+```
+
+会创建于一个定时器，每5s过去，就会执行sync()方法来落盘
+
+### Raft初始化
+
+注释解释的比较清楚了，部署Verticel过后执行了以下过程：
+
+1. 首先尝试向目标地址发送addServer请求
+    1. 如果收到的响应表示请求失败（可能是因为目标不是leader）那么会更新目标地址并重新发送请求，直到请求成功为止
+    2. 成功后，更新leaderId和对等node信息
+2. 初始化状态机和RPC处理器，并开始超时选举。如果发生错误，启动Promise失败并退出进程。
+
+```java
+override fun start(startPromise: Promise<Void>) {
+    //预先触发缺页中断
+    raftLog("node recover")
+    CoroutineScope(context.dispatcher()).launch {
+        try {
+            if (addModeConfig != null) {
+                raftLog("start in addServerMode")
+                var targetAddress = addModeConfig.SocketAddress()
+                //首先尝试向目标地址发送addServer请求
+                var response = rpc.addServer(
+                    targetAddress,
+                    AddServerRequest(RaftAddress(raftPort, "localhost", httpPort), me)
+                ).await()
+                while (!response.ok) {
+                    //如果收到的响应表示请求失败（可能是因为目标不是领导者）
+                    //那么会更新目标地址并重新发送请求，直到请求成功为止
+                    targetAddress = response.leader.SocketAddress()
+                    response = rpc.addServer(
+                        targetAddress,
+                        AddServerRequest(RaftAddress(raftPort, "localhost", httpPort), me)
+                    ).await()
+                }
+                raftLog("get now leader info $response")
+                //成功后，更新领导者ID和对等node信息
+                leadId = response.leaderId
+                peers.putAll(response.peer)
+                peers[response.leaderId] = RaftAddress(targetAddress).apply { httpPort = response.leader.httpPort }
+            }
+        } catch (t: Throwable) {
+            raftLog("addServerMode start error")
+            startPromise.fail(t)
+            exitProcess(1)
+        }
+        //初始化状态机和RPC处理器，并开始检查超时。如果发生错误，启动Promise失败并退出进程。
+        stateMachine.init()
+            .compose { rpcHandler.init(singleThreadVertx, raftPort) }
+            .onSuccess { startTimeoutCheck() }
+            .onSuccess { startPromise.complete() }
+            .onFailure(startPromise::fail)
+    }
+}
+```
+
+### 超时选举
+
+首先是**超时过程**：
+
+新起一个协程执行
+
+```java
+private fun startTimeoutCheck() {
+    CoroutineScope(context.dispatcher() as CoroutineContext).launch {
+        while (true) {
+            //超时时间设置为300-450之间
+            val timeout = (ElectronInterval + Random.nextInt(150)).toLong()
+            val start = System.currentTimeMillis()
+            delay(timeout)
+            if (lastHearBeat < start && status != RaftStatus.leader) {
+                //开始超时选举
+                startElection()
+            }
+        }
+    }
+}
+```
+
+超时过后就开始执行**选举过程**：
+
+```java
+private fun startElection() {
+    becomeCandidate()
+    raftLog("start election")
+    val buffer =
+        RequestVote(currentTerm, stateMachine.getNowLogIndex(), stateMachine.getLastLogTerm())
+    //法定人数为一半+1 而peer为不包含当前节点的集合 所以peer.size + 1为集群总数
+    val quorum = (peers.size + 1) / 2 + 1
+    //-1因为自己给自己投了一票
+    val count = AtomicInteger(quorum - 1)
+    val allowNextPromise = Promise.promise<Unit>()
+    if (count.get() == 0) {
+        allowNextPromise.complete()
+    }
+    val allowNext = AtomicBoolean(false)
+    val allFutures = mutableListOf<Future<RequestVoteReply>>()
+    for (address in peers) {
+        val requestVoteReplyFuture = rpc.requestVote(address.value.SocketAddress(), buffer)
+            .onSuccess {
+                val raft = this
+                if (it.isVoteGranted) {
+                    raftLog("get vote from ${address.key}, count: ${count.get()} allowNex: ${allowNext}}")
+                    if (count.decrementAndGet() == 0 && allowNext.compareAndSet(false, true)) {
+                        allowNextPromise.complete()
+                    }
+                    return@onSuccess
+                }
+                if (it.term > currentTerm) {
+                    becomeFollower(it.term)
+                }
+            }
+
+        allFutures += requestVoteReplyFuture
+    }
+    allowNextPromise.future()
+        .onComplete {
+            raftLog("allow to next, start checking status")
+            val raft = this
+            if (status == RaftStatus.candidate) {
+                raftLog("${me} become leader")
+                becomeLead()
+            }
+        }
+}
+```
+
+选举过程就很简单了
+
+1. 先把自己变成candidate：
+   
+    ```java
+    fun becomeCandidate() {
+        currentTerm++
+        votedFor = me
+        lastHearBeat = System.currentTimeMillis()
+        status = RaftStatus.candidate
+    }
+    ```
+    
+2. 发送RequestVoteRpc投票请求，当前node向peers里所有的node发送请求，这个过程是在for循环里执行的。先来看看RequestVoteRpc吧
+   
+    ```java
+    override fun requestVote(
+        remote: SocketAddress,
+        requestVote: RequestVote
+    ): Future<RequestVoteReply> {
+        return try {
+            raftRpcClient.post(remote.port(), remote.host(), requestVoteReply_path)
+                .putHeader(server_id_header, rf.me)
+                .`as`(BodyCodec.buffer())
+                .sendBuffer(requestVote.toBuffer())
+                .map {
+                    RequestVoteReply(it.body())
+                }
+        } catch (e: Exception) {
+            Future.failedFuture(e)
+        }
+    }
+    ```
+    
+    其实就是WebClient发起一次post请求。然后follower接收方将处理请求：
+    
+    ```java
+    private fun requestVote(msg: RequestVote): RequestVoteReply {
+    
+        rf.lastHearBeat = System.currentTimeMillis()
+    
+        rf.raftLog("receive request vote, msg :${msg}")
+        if (msg.term < rf.currentTerm) {
+            return RequestVoteReply(rf.currentTerm, false)
+        }
+        val lastLogTerm = rf.getLastLogTerm()
+        val lastLogIndex = rf.getNowLogIndex()
+        rf.currentTerm = msg.term
+        //若voteFor为空或者已经投给他了
+        //如果 votedFor 为空或者为 candidateId，并且候选人的日志至少和自己一样新，那么就投票给他（5.2 节，5.4 节）
+        if ((rf.votedFor == null || rf.votedFor == msg.candidateId) && msg.lastLogTerm >= lastLogTerm) {
+            if (msg.lastLogTerm == lastLogTerm && msg.lastLogIndex < lastLogIndex) {
+                return RequestVoteReply(rf.currentTerm, false)
+            }
+            rf.votedFor = msg.candidateId
+            rf.raftLog("vote to ${msg.candidateId}")
+            return RequestVoteReply(rf.currentTerm, true)
+        }
+        return RequestVoteReply(rf.currentTerm, false)
+    }
+    ```
+    
+    这个过程主要进行两个判断：
+    
+    1. term的判断
+    2. 自己是否已经vote给其他的candidate
+    
+    返回reply过后，candidate校验：
+    
+    ```java
+    if (it.isVoteGranted) {
+        //如果节点投了赞成票 isVoteGranted为true
+        //显示已经得到的赞成票数量和是否允许进入下一轮
+        raftLog("get vote from ${address.key}, count: ${count.get()} allowNex: ${allowNext}}")
+        //如果赞成票数量降到0，并且还没有进入下一轮，那么就会解锁allowNextPromise，允许进入下一轮。
+        if (count.decrementAndGet() == 0 && allowNext.compareAndSet(false, true)) {
+            allowNextPromise.complete()
+        }
+        return@onSuccess
+    }
+    ```
+    
+    至此，选举完成，变成leader：
+    
+    ```java
+    allowNextPromise.future().onComplete {
+        raftLog("allow to next, start checking status")
+        val raft = this
+        if (status == RaftStatus.candidate) {
+            raftLog("${me} become leader")
+            becomeLead()
+        }
+    }
+    
+    fun becomeLead() {
+        status = RaftStatus.leader
+        lastHearBeat = System.currentTimeMillis()
+        nextIndexes = mutableMapOf()
+        matchIndexes = mutableMapOf()
+        peers.forEach {
+            nextIndexes[it.key] = IntAdder(stateMachine.getNowLogIndex() + 1)
+            matchIndexes[it.key] = IntAdder(0)
+        }
+        leadId = me;
+    
+        //添加一个空日志 论文要求的
+        addLog(NoopCommand())
+        //不断心跳
+        CoroutineScope(context.dispatcher() as CoroutineContext).launch {
+            while (status == RaftStatus.leader) {
+                broadcastLog()
+                delay(heartBeat)
+            }
+        }
+    
+    }
+    ```
+    
+
+### 日志复制
+
+```java
+/**
+ * 外部调用的一个接口所以要确保线程安全
+ */
+@NonBlocking
+@SwitchThread(Raft::class)
+fun addLog(command: Command, promise: Promise<Unit>) {
+    if (leadId != me) {
+        promise.fail(
+            NotLeaderException(
+                "not leader!",
+                peers[leadId]
+            )
+        )
+        return
+    }
+    stateMachine.addLog(command, promise::complete)
+}
+/**
+ * leader状态时client请求附加日志
+ */
+@NonBlocking
+@SwitchThread(Raft::class)
+fun addLog(command: Command, callback: () -> Unit) {
+    vertx.runOnContext {
+        //获取当前的日志索引
+        val index = getNowLogIndex() + 1
+        //创建一个新的日志条目并将其添加到日志中
+        val log = Log(index, rf.currentTerm, command.toByteArray())
+        logs.add(log)
+        //将这个日志条目添加到日志分发器中
+        logDispatcher.appendLogs(listOf(log))
+        if (command !is ServerConfigChangeCommand) {
+            //如果命令不是ServerConfigChangeCommand，那么将索引和回调函数添加到等待队列中
+            applyEventWaitQueue.offer(index to callback)
+        } else {
+            //这里特殊直接就apply
+            handleServerConfigChangeCommand(command, callback, index)
+        }
+    }
+}
+```
